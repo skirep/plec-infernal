@@ -1,6 +1,6 @@
 import { arsenal, bestiary, chapters, directions, distances, makeLevel, random } from './campaign.js';
-import { makeArt } from './art.js';
-import { makeView, raycast } from './view.js';
+import { makeArt } from './art.js?v=2';
+import { makeView, raycast } from './view.js?v=2';
 
 const $ = id => document.getElementById(id);
 const world = $('world');
@@ -87,8 +87,9 @@ function reset(index, campaign) {
     map, index, campaign,
     p: { ...map.start,a:0,pitch:0,health:100,armor:0 },
     enemies: map.enemies.map((e,i) => ({ ...e, ...bestiary[e.type], phase:i*2.4,
-      wake:i===0 ? .35 : -1, dead:0, cooldown:.30+(i%6)*.13, flash:0 })),
-    pickups: map.pickups, bolts: [], ammo: arsenal.map(w => w.stock ? Math.ceil(w.stock*.62) : Infinity),
+      wake:i===0 ? .35 : -1, dead:0, cooldown:.30+(i%6)*.13, flash:0,
+      heading:Math.PI, gait:0, travel:0, attack:null })),
+    pickups: map.pickups, bolts: [], fragments: [], ammo: arsenal.map(w => w.stock ? Math.ceil(w.stock*.62) : Infinity),
     weapon: 1, time:0, walk:0, recoil:0, shot:0, hit:0, hurt:0, navTimer:0,
     path:null, seal:false, open:false, kills:0, discovered:new Uint8Array(map.size*map.size)
   };
@@ -196,16 +197,52 @@ function nextWeapon(direction) {
   changeWeapon(index);
 }
 
+function scatter(enemy, defeated) {
+  const count = defeated ? 12 : 5;
+  const start = enemy.type >= 12 ? .67 : .47;
+  for (let i=0; i<count; i++) {
+    const a = rand()*Math.PI*2;
+    const speed = .34+rand()*(defeated ? 1.9 : .95);
+    state.fragments.push({
+      x:enemy.x, y:enemy.y, z:start + (rand()-.5)*.20,
+      vx:Math.cos(a)*speed, vy:Math.sin(a)*speed, vz:.48+rand()*1.7,
+      age:0, life:.34+rand()*.39, spin:(rand()-.5)*16, angle:a,
+      color:i%3===0 ? enemy.accent : enemy.color
+    });
+  }
+  if (state.fragments.length>128) state.fragments.splice(0,state.fragments.length-128);
+}
+
+function updateFragments(dt) {
+  state.fragments = state.fragments.filter(f => {
+    f.age += dt;
+    if (f.age>=f.life) return false;
+    move(f,f.vx*dt,f.vy*dt,.035);
+    f.z += f.vz*dt;
+    f.vz -= 5.6*dt;
+    if (f.z<.015) {
+      f.z=.015;
+      f.vx*=.69;
+      f.vy*=.69;
+      f.vz*= -.14;
+    }
+    f.angle += f.spin*dt;
+    return true;
+  });
+}
+
 function damageEnemy(enemy, damage) {
   if (enemy.dead) return;
   enemy.hp -= damage*(enemy.armor ?? 1);
-  enemy.flash = .12;
+  const firstImpact = enemy.flash < .17;
+  enemy.flash = .22;
   if (enemy.wake < 0) enemy.wake = .12;
   state.hit = .15;
   if (enemy.hp <= 0) {
     enemy.dead = .001;
     state.kills++;
-  }
+    scatter(enemy,true);
+  } else if (firstImpact) scatter(enemy,false);
 }
 
 function shoot() {
@@ -267,6 +304,38 @@ function hurtPlayer(damage) {
   effect('hurt');
 }
 
+function turnEnemy(e,x,y,dt) {
+  const desired = Math.atan2(y,x);
+  const delta = desired-e.heading;
+  e.heading += Math.atan2(Math.sin(delta),Math.cos(delta))*(1-Math.exp(-10*dt));
+}
+
+function animateAttack(e, dx, dy, gap, clear, dt) {
+  const attack = e.attack;
+  if (attack) {
+    attack.timer += dt;
+    if (!attack.sent && attack.timer >= attack.windup) {
+      attack.sent = true;
+      if (attack.projectile && clear && gap < 7.6) {
+        const a = Math.atan2(dy,dx);
+        const spread = e.type === 13 ? [-.16,0,.16] : e.type === 12 ? [-.075,.075] : [0];
+        for (const angle of spread) {
+          const vx = Math.cos(a+angle), vy = Math.sin(a+angle);
+          state.bolts.push({ x:e.x+vx*.16, y:e.y+vy*.16, vx:vx*3.3, vy:vy*3.3, damage:e.damage, life:3.3 });
+        }
+        if (gap < 4) effect('bolt');
+      } else if (!attack.projectile && clear && gap < .86) hurtPlayer(e.damage);
+    }
+    if (attack.timer >= attack.windup+.31) e.attack = null;
+    return true;
+  }
+  if (e.cooldown>0 || !clear || gap >= (e.ranged ? 6.8 : .74)) return false;
+  const projectile = Boolean(e.ranged && gap>.82);
+  e.attack = {timer:0,windup:projectile ? (e.type>=12 ? .43 : .31) : (e.pace>1.8 ? .18 : .24),projectile,sent:false};
+  e.cooldown = e.ranged ? 1.23+(e.phase%1)*.55 : .80;
+  return true;
+}
+
 function trackEnemy(e,dt) {
   const {p,map,path} = state;
   const dx = p.x-e.x, dy = p.y-e.y;
@@ -276,18 +345,11 @@ function trackEnemy(e,dt) {
   if (e.wake < 0) return;
   e.wake += dt;
   e.cooldown -= dt;
-  if (e.wake < .24) return;
-  if (e.cooldown <= 0 && clear && gap < (e.ranged ? 6.8 : .74)) {
-    e.cooldown = e.ranged ? 1.23+(e.phase%1)*.55 : .80;
-    if (e.ranged && gap > .78) {
-      const a = Math.atan2(dy,dx);
-      const spread = e.type === 13 ? [-.16,0,.16] : e.type === 12 ? [-.075,.075] : [0];
-      for (const v of spread) state.bolts.push({ x:e.x, y:e.y, vx:Math.cos(a+v)*3.3, vy:Math.sin(a+v)*3.3, damage:e.damage, life:3.3 });
-      if (gap < 4) effect('bolt');
-    } else {
-      hurtPlayer(e.damage);
-    }
-  }
+  const oldGait = e.gait;
+  const easing = 1-Math.exp(-13*dt);
+  e.gait *= 1-easing;
+  if (clear) turnEnemy(e,dx,dy,dt);
+  if (e.wake < .24 || animateAttack(e,dx,dy,gap,clear,dt)) return;
   if (clear && gap < (e.ranged ? 3.2 : .57)) return;
   let mx = dx, my = dy;
   if (!clear) {
@@ -299,6 +361,7 @@ function trackEnemy(e,dt) {
     if (!next) return;
     mx = x+next[0]+.5-e.x;
     my = y+next[1]+.5-e.y;
+    turnEnemy(e,mx,my,dt);
   }
   const length = Math.max(.01,Math.hypot(mx,my));
   const pace = e.pace*(1+state.index*.008);
@@ -311,6 +374,9 @@ function trackEnemy(e,dt) {
     const d = Math.hypot(x,y);
     if (d>.001 && d<.44) move(e,x/d*dt*.8,y/d*dt*.8,.15);
   }
+  const moved = Math.hypot(e.x-ox,e.y-oy);
+  e.travel += moved;
+  e.gait = oldGait+(Math.min(1,moved/Math.max(.001,pace*dt))-oldGait)*easing;
 }
 
 function updateBolts(dt) {
@@ -443,6 +509,7 @@ function update(dt) {
     else trackEnemy(e,dt);
   }
   updateBolts(dt);
+  updateFragments(dt);
   if (noticeTimer > 0 && (noticeTimer -= dt) <= 0) $('notice').textContent = '';
   if (p.health <= 0) { interlude('dead'); return; }
   collect();

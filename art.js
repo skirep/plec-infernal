@@ -1,5 +1,6 @@
 import { paperSheet, printCard, mix, shade } from './vendor/paperkit-2d.js';
 import { arsenal, bestiary, random } from './campaign.js';
+import { makeCreatureRigs } from './creatures.js?v=2';
 
 /*
   BRIEF: underground printing works with living folded monsters, original retro FPS.
@@ -105,48 +106,86 @@ export function makeArt() {
     }, 228 + i * 91);
   }
 
-  function printableWall(theme, type) {
-    const base = type === 2 ? shade(theme.wall, .78) : theme.wall;
+  function printableWall(theme, type, chapterIndex) {
+    const base = type === 3 ? shade(theme.wall, .75) : theme.wall;
     return print(card, base, p => {
-      const rail = mix(base, theme.trim, .36);
-      const dark = shade(theme.ink, .9);
-      layer(p, rect(.022,.055,.956,.86), shade(base, .77));
-      layer(p, rect(.052,.104,.896,.745), rail);
-      layer(p, rect(.074,.133,.848,.685), base);
-      layer(p, rect(.089,.168,.818,.615), shade(base, .87));
-      layer(p, [[.11,.19],[.88,.19],[.88,.72],[.11,.48]], shade(base, .80));
-      for (const y of [.06,.865]) {
-        layer(p, rect(.03,y,.94,.064), shade(theme.trim, .71));
-        layer(p, rect(.06,y+.039,.88,.017), theme.trim, .16);
+      const rail = mix(base, theme.trim, .44);
+      const dark = shade(theme.ink, .82);
+      layer(p, rect(.015,.042,.97,.906), shade(base, .65));
+      layer(p, rect(.042,.114,.916,.73), rail);
+      layer(p, rect(.064,.137,.872,.684), base);
+      layer(p, rect(.092,.165,.816,.625), shade(base, .84));
+      layer(p, [[.10,.19],[.89,.19],[.89,.76],[.10,.57]], shade(base, .93));
+      for (const y of [.04,.86]) {
+        layer(p, rect(.018,y,.964,.086), shade(theme.trim, .63));
+        layer(p, rect(.021,y+.054,.958,.018), theme.trim, .15);
+        layer(p, rect(.019,y+.011,.962,.021), dark, .13);
       }
-      for (const x of [.11,.88]) {
-        for (const y of [.21,.73]) layer(p, gem(x,y,.026,.031), theme.trim,.17);
+      for (const x of [.114,.875]) for (const y of [.21,.735]) {
+        layer(p,gem(x,y,.025,.031),theme.trim,.16);
+        layer(p,gem(x,y-.003,.008,.012),dark,.12);
       }
-      if (type === 2) {
-        for (let i = 0; i < 6; i++) layer(p, rect(.17+i*.12,.27,.05,.40), rail,.19);
+      if (type === 3) {
+        for (let i=0;i<6;i++) {
+          layer(p,rect(.169+i*.122,.26,.050,.45),dark,.25);
+          layer(p,rect(.173+i*.122,.28,.013,.40),rail,.12);
+        }
+      } else if (type === 2) {
+        const lantern = [[.27,.29],[.20,.43],[.30,.68],[.44,.76],[.56,.76],[.70,.68],[.80,.43],[.73,.29]];
+        layer(p,lantern,dark,.55);
+        layer(p,gem(.50,.49,.22,.25),rail,.38);
+        layer(p,gem(.50,.49,.158,.193),'#e8ad66',.31);
+        layer(p,gem(.50,.52,.100,.137),'#f6d591',.19);
+        layer(p,rect(.29,.385,.42,.027),dark,.18);
+      } else if (type === 1) {
+        for (let i=0;i<3;i++) {
+          const y=.28+i*.147;
+          layer(p,[[.15,y],[.79,y],[.85,y+.083],[.23,y+.102]],i%2 ? rail : dark,.32);
+          layer(p,rect(.33,y+.036,.32,.021),theme.trim,.12);
+        }
       } else {
-        layer(p, gem(.5,.47,.25,.31), dark);
-        layer(p, gem(.5,.47,.208,.25), rail);
-        layer(p, gem(.5,.47,.164,.20), shade(base, .72));
-        layer(p, [[.39,.38],[.49,.56],[.57,.57],[.61,.62],[.61,.49],[.50,.36]], theme.trim, .25);
+        layer(p,gem(.50,.48,.278,.284),dark,.54);
+        layer(p,gem(.50,.48,.238,.252),rail,.39);
+        layer(p,gem(.50,.48,.195,.199),shade(base,.61),.32);
+        const motifs = [
+          [[.35,.38],[.46,.59],[.51,.62],[.64,.63],[.56,.56],[.62,.54],[.50,.41],[.43,.38]],
+          [[.32,.44],[.38,.57],[.48,.60],[.62,.56],[.68,.47],[.57,.39],[.46,.38],[.50,.49],[.56,.52],[.47,.53],[.41,.47]],
+          [[.41,.36],[.34,.47],[.46,.61],[.48,.53],[.59,.61],[.65,.49],[.58,.39],[.53,.46],[.49,.38]],
+          [[.35,.37],[.45,.54],[.47,.63],[.54,.60],[.68,.53],[.60,.44],[.53,.41],[.46,.42],[.42,.36]],
+          [[.35,.38],[.35,.48],[.44,.60],[.50,.63],[.60,.56],[.66,.47],[.66,.38],[.57,.38],[.57,.47],[.50,.55],[.43,.46],[.43,.38]],
+          [[.38,.37],[.42,.52],[.48,.62],[.57,.60],[.65,.50],[.61,.45],[.52,.49],[.47,.41]]
+        ];
+        layer(p,motifs[chapterIndex],theme.trim,.25);
       }
-    }, 390 + type, 192);
+    }, 390+type*71+chapterIndex, 224);
   }
 
   function surface(theme, top) {
-    const base = top ? shade(theme.wall, .52) : theme.floor;
+    const base = top ? shade(theme.wall,.59) : theme.floor;
     const texture = print(card, base, p => {
       const {g} = p;
-      g.fillStyle = top ? shade(base,.83) : shade(base,.72);
-      g.fillRect(0,0,1,.024);
-      g.fillRect(0,0,.024,1);
-      g.fillStyle = mix(base, theme.trim, .24);
-      g.fillRect(.030,.033,.95,.018);
-      g.fillRect(.032,.034,.018,.94);
-      g.fillStyle = shade(base,.9);
-      for (let y = .15; y < .8; y += .24) g.fillRect(.17,y,.67,.012);
+      const join = top ? .041 : .025;
+      g.fillStyle = shade(base,.69);
+      g.fillRect(0,0,1,join);
+      g.fillRect(0,0,join,1);
+      g.fillStyle = mix(base,theme.trim,.31);
+      g.fillRect(join,.045,.94,.015);
+      g.fillRect(.043,join,.014,.94);
+      g.fillStyle = shade(base,.88);
+      const marks = top ? [.16,.19,.74,.77] : [.21,.48,.74];
+      for (const y of marks) g.fillRect(.15,y,.72,.013);
+      for (const x of [.12,.88]) for (const y of [.12,.87]) {
+        g.fillStyle = shade(base,.72);
+        g.fillRect(x,y,.041,.043);
+        g.fillStyle = mix(base,theme.trim,.38);
+        g.fillRect(x,y+.018,.033,.015);
+      }
+      if (!top) {
+        g.fillStyle = mix(shade(base,.70),theme.trim,.28);
+        for (let i=0;i<3;i++) g.fillRect(.19+i*.21,.65,.11,.019);
+      }
     }, 338, 64);
-    return texture.getContext('2d').getImageData(0, 0, 64, 64).data;
+    return texture.getContext('2d').getImageData(0,0,64,64).data;
   }
 
   function item(kind, colors) {
@@ -212,11 +251,11 @@ export function makeArt() {
   };
   const flecks = random(471);
   return {
-    monsters: bestiary.map(monster),
+    monsters: makeCreatureRigs(bestiary, bestiary.map(monster), print, layer),
     weapons: arsenal.map(weapon),
     items: Object.fromEntries(Object.entries(props).map(([key, color]) => [key, item(key, color)])),
-    chapter: theme => ({
-      walls: [printableWall(theme, 1), printableWall(theme, 2)],
+    chapter: (theme, index) => ({
+      walls: Array.from({length:4},(_,type) => printableWall(theme,type,index)),
       floor: surface(theme, false), ceiling: surface(theme, true),
       portal: [portal(theme,false), portal(theme,true)]
     }),

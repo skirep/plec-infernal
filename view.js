@@ -1,3 +1,5 @@
+import { drawCreature } from './creatures.js?v=2';
+
 const optics = .72;
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 
@@ -23,7 +25,7 @@ export function raycast(grid, x, y, dx, dy) {
   } while (!tile);
   let u = side ? x + depth * dx : y + depth * dy;
   u -= Math.floor(u);
-  return { depth, tile, side, u };
+  return { depth, tile, side, u, mx, my };
 }
 
 export function makeView(canvas, art) {
@@ -33,11 +35,16 @@ export function makeView(canvas, art) {
   let backdrop, buffer, depth, upperLeft;
   let w, h, stamp, themeIndex = -1;
   let textures, angle, fx, fy, focal, horizon, eye;
+  const themes = new Map();
+  const warmScale = 5;
+  let mapRef, warmth, lightSize;
 
   function resize() {
     const clientW = canvas.clientWidth || innerWidth;
     const clientH = canvas.clientHeight || innerHeight;
-    const ratio = Math.min(1, 760 / clientW, 480 / clientH);
+    const hand = matchMedia('(pointer: coarse)').matches;
+    const density = hand ? 1 : Math.min(devicePixelRatio,1.25);
+    const ratio = Math.min(density, (hand ? 870 : 1180) / clientW, (hand ? 560 : 750) / clientH);
     w = canvas.width = Math.round(clientW * ratio);
     h = canvas.height = Math.round(clientH * ratio);
     floorLayer.width = Math.ceil(w / 2);
@@ -47,7 +54,30 @@ export function makeView(canvas, art) {
     depth = new Float32Array(w);
     upperLeft = g.createRadialGradient(w*.49,h*.46,h*.22,w*.49,h*.46,Math.max(w,h)*.66);
     upperLeft.addColorStop(0,'transparent');
-    upperLeft.addColorStop(1,'rgba(29,15,35,.45)');
+    upperLeft.addColorStop(1,'rgba(29,15,35,.29)');
+  }
+
+  function bakeLight(map) {
+    lightSize = map.size*warmScale;
+    warmth = new Float32Array(lightSize*lightSize);
+    const lamps = map.pickups.filter(p=>p.kind==='lantern');
+    const points = [...lamps,{x:map.start.x+.6,y:map.start.y-.8}];
+    for (let y=0;y<lightSize;y++) for (let x=0;x<lightSize;x++) {
+      const px = x/warmScale, py = y/warmScale;
+      const adjacent = map.grid[Math.floor(py)]?.[Math.floor(px)] ? .23 : 0;
+      let light = 0;
+      for (const lamp of points) {
+        const dx = lamp.x-px, dy = lamp.y-py;
+        const gap = dx*dx+dy*dy;
+        if (gap < 14) light += (1-gap/14)**3;
+      }
+      warmth[y*lightSize+x] = Math.min(1.20,light)-adjacent;
+    }
+  }
+
+  function sampleLight(x,y) {
+    const ix = (x*warmScale)|0, iy = (y*warmScale)|0;
+    return ix>=0 && ix<lightSize && iy>=0 && iy<lightSize ? warmth[iy*lightSize+ix] : 0;
   }
 
   function drawSheets(p) {
@@ -57,16 +87,17 @@ export function makeView(canvas, art) {
       const sheet = delta > 0 ? textures.floor : textures.ceiling;
       const d = Math.min(32, (delta > 0 ? eye : 1.15-eye) * focal / Math.max(1, Math.abs(delta)));
       const s = d / focal;
-      const factor = (delta > 0 ? .89 : .82) / (1 + d * .10);
+      const factor = (delta > 0 ? .94 : .83) / (1 + d * .067);
       const rx = -fy*s, ry = fx*s;
       let wx = p.x + d*fx - w*.5*rx;
       let wy = p.y + d*fy - w*.5*ry;
       let row = y * width * 4;
       for (let x = 0; x < width; x++) {
         const idx = ((((wy * 64) | 0) & 63) * 64 + (((wx * 64) | 0) & 63)) * 4;
-        buffer[row++] = sheet[idx] * factor + 22 * (1-factor);
-        buffer[row++] = sheet[idx+1] * factor + 17 * (1-factor);
-        buffer[row++] = sheet[idx+2] * factor + 26 * (1-factor);
+        const lamp = sampleLight(wx,wy)*factor;
+        buffer[row++] = sheet[idx]*factor + 31*(1-factor) + lamp*23;
+        buffer[row++] = sheet[idx+1]*factor + 23*(1-factor) + lamp*13;
+        buffer[row++] = sheet[idx+2]*factor + 33*(1-factor) + lamp*4;
         buffer[row++] = 255;
         wx += 2*rx;
         wy += 2*ry;
@@ -85,14 +116,10 @@ export function makeView(canvas, art) {
   function billboards(state) {
     const objects = [];
     for (const e of state.enemies) {
-      if (e.dead && e.dead > .68) continue;
-      const unfold = e.wake >= 0 ? Math.cos(Math.PI*.49*Math.exp(-e.wake*6)*Math.cos(e.wake*11)) : .94;
-      const fold = e.dead ? Math.cos(1.55*Math.min(1,e.dead/.66)) : unfold;
-      const monster = art.monsters[e.type];
-      const flight = e.type === 1 || e.type === 7;
-      objects.push({ ...e, image: monster, size: e.type >= 12 ? 1.10 : flight ? .53 : .70,
-        sx: flight ? .89+Math.sin(state.time*13+e.phase)*.10 : .99+Math.sin(state.time*7+e.phase)*.02,
-        sy: fold, lift: flight ? .22+Math.sin(state.time*4+e.phase)*.037 : 0 });
+      if (e.dead > 2.9) continue;
+      const rig = art.monsters[e.type];
+      objects.push({ x:e.x, y:e.y, creature:e, rig, size:rig.h, aspect:1.65, time:state.time,
+        side:Math.sin(e.heading-Math.atan2(state.p.y-e.y,state.p.x-e.x)) });
     }
     const sizes = {ammo:.22,health:.22,armor:.21,seal:.35,lantern:.52,crate:.42,scrap:.21};
     for (const o of state.pickups) {
@@ -100,7 +127,8 @@ export function makeView(canvas, art) {
         lift: o.kind === 'seal' ? .13+Math.sin(state.time*4)*.038 : 0 });
     }
     objects.push({ ...state.map.exit, size: 1.08, image: textures.portal[Number(state.open)] });
-    for (const b of state.bolts) objects.push({ ...b, size: .13, image: art.items.bolt, lift: .48 });
+    for (const b of state.bolts) objects.push({ ...b, size:.14, image:art.items.bolt, lift:.48, ember:true, time:state.time });
+    for (const f of state.fragments) objects.push({ ...f, zHeight:f.z, size:.05, aspect:1.8, fragment:true });
     for (const o of objects) Object.assign(o,project(o,state.p));
     objects.sort((a,b)=>b.z-a.z);
     for (const o of objects) drawSprite(o);
@@ -109,8 +137,8 @@ export function makeView(canvas, art) {
   function drawSprite(o) {
     if (o.z < .13 || o.z > 27) return;
     const unit = focal/o.z;
-    const tall = unit*o.size*(o.sy ?? 1);
-    const wide = unit*o.size*(o.sx ?? 1)*o.image.width/o.image.height;
+    const tall = unit*o.size;
+    const wide = tall*(o.aspect ?? (o.image.width/o.image.height));
     const foot = horizon + unit*eye;
     const top = foot - tall - unit*(o.lift ?? 0);
     const left = o.u-wide/2;
@@ -129,17 +157,44 @@ export function makeView(canvas, art) {
     g.beginPath();
     for (const [a,b] of bars) g.rect(a,0,b-a,h);
     g.clip();
-    if (o.size > .2) {
-      g.fillStyle = 'rgba(51,28,38,.31)';
+    if (o.creature) {
+      const e = o.creature;
+      const opacity = 1-clamp((e.dead-2.2)/.7,0,1);
+      g.globalAlpha = opacity;
+      const r = wide*.24;
+      g.fillStyle = 'rgba(47,27,35,.27)';
       g.beginPath();
-      g.ellipse(o.u+wide*.07, foot, wide*.46, Math.max(1,wide*.085), -.09, 0, Math.PI*2);
+      g.ellipse(o.u+r*.19,foot,r,r*.28,-.12,0,Math.PI*2);
       g.fill();
-    }
-    g.drawImage(o.image, left, top, wide, tall);
-    if (o.flash > 0) {
-      g.globalAlpha = .48;
-      g.globalCompositeOperation = 'screen';
-      g.drawImage(o.image, left, top, wide, tall);
+      g.fillStyle = 'rgba(52,29,35,.22)';
+      g.beginPath();
+      g.ellipse(o.u,foot,r*.63,r*.12,-.12,0,Math.PI*2);
+      g.fill();
+      drawCreature(g,o.rig,e,o.u,foot,unit,o.time,o.side);
+    } else if (o.fragment) {
+      const y = foot - unit*o.zHeight;
+      g.translate(o.u,y);
+      g.rotate(o.angle);
+      g.globalAlpha = Math.min(1,(1-o.age/o.life)*2.5);
+      g.fillStyle = o.color;
+      g.beginPath();
+      g.moveTo(-wide*.38,0); g.lineTo(wide*.30,-tall*.24);
+      g.lineTo(wide*.36,tall*.27); g.lineTo(-wide*.18,tall*.38);
+      g.fill();
+      g.fillStyle = '#f3c890';
+      g.fillRect(-wide*.25,-tall*.05,wide*.53,Math.max(.6,tall*.10));
+    } else {
+      if (o.size > .2) {
+        g.fillStyle = 'rgba(51,28,38,.31)';
+        g.beginPath();
+        g.ellipse(o.u+wide*.07,foot,wide*.46,Math.max(1,wide*.085),-.09,0,Math.PI*2);
+        g.fill();
+      }
+      if (o.ember) {
+        g.translate(o.u,top+tall/2);
+        g.rotate(o.time*11);
+        g.drawImage(o.image,-wide/2,-tall/2,wide,tall);
+      } else g.drawImage(o.image,left,top,wide,tall);
     }
     g.restore();
   }
@@ -179,7 +234,12 @@ export function makeView(canvas, art) {
     if (!w) resize();
     if (themeIndex !== state.map.chapterIndex) {
       themeIndex = state.map.chapterIndex;
-      textures = art.chapter(state.map.chapter);
+      if (!themes.has(themeIndex)) themes.set(themeIndex,art.chapter(state.map.chapter,themeIndex));
+      textures = themes.get(themeIndex);
+    }
+    if (mapRef!==state.map) {
+      mapRef = state.map;
+      bakeLight(mapRef);
     }
     angle = state.p.a;
     fx = Math.cos(angle);
@@ -193,13 +253,21 @@ export function makeView(canvas, art) {
       const ray = raycast(state.map.grid,state.p.x,state.p.y,fx-fy*side,fy+fx*side);
       const z = Math.max(.05,ray.depth);
       depth[x] = depth[x+1] = z;
-      const texture = textures.walls[ray.tile-1];
+      const panel = (ray.mx*41+ray.my*29+ray.side*7)%13;
+      const texture = textures.walls[ray.tile===2 ? 3 : panel<2 ? 2 : panel<6 ? 1 : 0];
       const unit = focal/z;
       const y = horizon-unit*(1.15-eye);
       g.drawImage(texture, clamp(Math.floor(ray.u*texture.width),0,texture.width-1),0,1,texture.height,x,y,2,unit*1.15+.55);
-      const shadow = Math.min(.79, .12 + .13*ray.side + z*.051);
-      g.fillStyle = 'rgba(33,20,34,'+shadow+')';
+      const wx = state.p.x + z*(fx-fy*side)*.97;
+      const wy = state.p.y + z*(fy+fx*side)*.97;
+      const lamp = sampleLight(wx,wy);
+      const shadow = clamp(.055 + .11*ray.side + z*.036 - lamp*.115,.035,.73);
+      g.fillStyle = 'rgba(42,21,44,'+shadow+')';
       g.fillRect(x,y,2,unit*1.15+.55);
+      if (lamp>.23) {
+        g.fillStyle = 'rgba(255,186,104,'+Math.min(.18,lamp*.105)+')';
+        g.fillRect(x,y,2,unit*1.15+.55);
+      }
     }
     billboards(state);
     for (const [px,py,turn] of art.motes) {
